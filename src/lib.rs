@@ -3,14 +3,13 @@ use std::convert::Infallible;
 use failure::Fallible;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
-use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 use std::future::Future;
 use bytes::buf::ext::BufExt;
 
 mod messages;
 use messages::Message;
-use crate::messages::Update;
+use crate::messages::{Update, Contents};
 
 type CommandRef = usize;
 
@@ -75,12 +74,17 @@ impl <F, Fut> Bot<F>
                 let command_idx = self.current_command.unwrap_or_default();
                 let command = self.commands.get(command_idx).unwrap();
                 let whole_body = hyper::body::aggregate(request).await?;
-                let update: Update = serde_json::from_reader(whole_body.reader())?;
-                let res = (command.cb)(update.message.unwrap()).await;
+                let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
+
+                match update.contents {
+                    Contents::Command(_) => unimplemented!(),
+                    Contents::Message(message) => (command.cb)(message).await,
+                    Contents::None => unimplemented!()
+                };
 
                 Ok(Response::builder()
                     .status(StatusCode::OK)
-                    .body(Body::from(vec![res]))
+                    .body(Body::empty())
                     .unwrap()
                 )
             },

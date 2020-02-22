@@ -1,39 +1,89 @@
 use serde::{de, Deserialize, Serialize, Deserializer};
+use serde_json::Value;
+use serde::de::{Visitor, MapAccess};
+use failure::_core::fmt::{Formatter, Debug};
+use std::fmt;
 
-#[derive(Deserialize)]
+#[derive(Debug)]
 pub struct Update {
-    pub update_id: i32,
-    pub message: Option<Message>
+    pub update_id: u64,
+    pub contents: Contents,
+}
+
+impl <'de>Deserialize<'de> for Update {
+    fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error> where
+        D: Deserializer<'de> {
+
+        struct UpdateVisitor;
+
+        impl <'de>Visitor<'de> for UpdateVisitor {
+            type Value = Update;
+
+            fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+                formatter.write_str("struct Update")
+            }
+
+
+            fn visit_map<V>(self, mut map: V) -> Result<Update, V::Error>
+                where
+                    V: MapAccess<'de>,
+            {
+                let mut update_id = None;
+                let mut contents = None;
+
+                while let Some((key, value)) = map.next_entry::<String, Value>()? {
+                    match &*key {
+                        "update_id" => {
+                            if update_id.is_some() {
+                                return Err(de::Error::duplicate_field("update_id"));
+                            }
+                            update_id = value.as_u64();
+                        },
+                        "message" => {
+                            if contents.is_some() {
+                                return Err(de::Error::duplicate_field("contents"));
+                            }
+
+                            let text = value.get("text").and_then(|value|value.as_str());
+
+                            if let Some(text) = text {
+                                contents = match text.chars().next() {
+                                    Some('/') => Some(Contents::Command(Command(String::from(&text[1..])))),
+                                    _ => Some(Contents::Message(Message::deserialize(value).map_err(de::Error::custom)?))
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let update_id = update_id.ok_or_else(|| de::Error::missing_field("update_id"))?;
+                let contents = contents.unwrap_or(Contents::None);
+
+                Ok(Update{ update_id, contents })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["update_id", "contents"];
+        deserializer.deserialize_struct("Update", FIELDS, UpdateVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
-    #[serde(deserialize_with = "deserialize_contents")]
-    pub text: Contents,
+    pub text: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
+pub struct Command(String);
+
+#[derive(Debug)]
 pub enum Contents {
-    Command(String),
-    Text(String)
+    Command(Command),
+    Message(Message),
+    None
 }
 
-fn deserialize_contents<'de, D>(
-    deserializer: D,
-) -> Result<Contents, D::Error>
-    where
-        D: Deserializer<'de>,
-{
-    let raw_text = String::deserialize(deserializer)?;
-
-    let contents = match raw_text.chars().next() {
-        Some('/') => {
-            Contents::Command(String::from(&raw_text[1..]))
-        },
-        _ => Contents::Text(raw_text)
-    };
-    Ok(contents)
-}
 
 #[derive(Deserialize)]
 pub struct CallbackMessage;
