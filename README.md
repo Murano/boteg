@@ -1,0 +1,3 @@
+# boteg
+
+Simple telegram bot
