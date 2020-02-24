@@ -2,40 +2,47 @@ use std::convert::Infallible;
 
 use failure::Fallible;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::{Body, Method, Request, Response, Server, StatusCode, Uri};
 use std::sync::Arc;
 use std::future::Future;
 use bytes::buf::ext::BufExt;
 
 mod messages;
-use messages::Message;
-use crate::messages::{Update, Contents};
+pub use crate::messages::{Update, Contents, ResponseMessage, Message};
+use std::net::SocketAddr;
+use std::convert::TryInto;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::pin::Pin;
 
-type CommandRef = usize;
+type CommandRef = AtomicUsize;
 
 pub struct Bot<F> {
     commands: Vec<Command<F>>,
-    current_command: Option<CommandRef>,
+    current_command: CommandRef,
     callbacks: Vec<Callback>,
+    tg_api_uri: Uri,
+    addr: SocketAddr,
 }
 
 impl <F, Fut> Bot<F>
     where F: Fn(Message) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=u8> + Send + 'static
+        Fut: Future<Output=ResponseMessage> + Send + 'static
 {
 
-    pub fn new() -> Self {
+    pub fn new<A: Into<SocketAddr>>(addr: A, tg_api_uri: &'static str) -> Self {
         Self {
             commands: vec![],
-            current_command: None,
+            current_command: AtomicUsize::new(0),
             callbacks: vec![],
+            tg_api_uri: Uri::from_static(tg_api_uri),
+            addr: addr.into(),
         }
     }
 
     pub fn add_command(&mut self, name: &'static  str, cb: F) {
         self.commands.push(Command {
             name,
-            cb
+            cb: Box::new(cb)
         })
     }
 
@@ -44,12 +51,9 @@ impl <F, Fut> Bot<F>
     }
 
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
+        let addr = self.addr;
         let bot = Arc::new(self);
-        // let bot = bot.clone();
         let make_svc = make_service_fn(move|_conn| {
-            // This is the `Service` that will handle the connection.
-            // `service_fn` is a helper to convert a function that
-            // returns a Response into a `Service`.
             let bot = bot.clone();
             async { Ok::<_, Infallible>(service_fn(move|request|{
                 let bot = bot.clone();
@@ -57,12 +61,7 @@ impl <F, Fut> Bot<F>
             })) }
         });
 
-        let addr = ([0, 0, 0, 0], 8088).into();
-
         let server = Server::bind(&addr).serve(make_svc);
-
-        println!("Listening on http://{}", addr);
-
         server.await?;
 
         Ok(())
@@ -71,20 +70,25 @@ impl <F, Fut> Bot<F>
     async fn handle(self: Arc<Bot<F>>, request: Request<Body>) -> Fallible<Response<Body>> {
         match (request.method(), request.uri().path()) {
             (&Method::POST, "/bot") => { //FIXME test purpose
-                let command_idx = self.current_command.unwrap_or_default();
+                let command_idx = self.current_command.load(Ordering::Relaxed);
                 let command = self.commands.get(command_idx).unwrap();
                 let whole_body = hyper::body::aggregate(request).await?;
                 let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
 
-                match update.contents {
-                    Contents::Command(_) => unimplemented!(),
-                    Contents::Message(message) => (command.cb)(message).await,
-                    Contents::None => unimplemented!()
+                let body = match update.contents {
+                    Contents::Command(command) => Body::empty(),
+                    Contents::Message(message) => {
+                        let response =  (command.cb)(message).await;
+                        response.try_into()?
+                    },
+                    Contents::None => Body::empty()
                 };
+
+
 
                 Ok(Response::builder()
                     .status(StatusCode::OK)
-                    .body(Body::empty())
+                    .body(body)
                     .unwrap()
                 )
             },
@@ -101,9 +105,8 @@ impl <F, Fut> Bot<F>
 
 struct Command<F> {
     name: &'static str,
-    cb: F
+    cb: Box<F>
 }
-
 
 struct Callback;
 

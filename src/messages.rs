@@ -3,6 +3,8 @@ use serde_json::Value;
 use serde::de::{Visitor, MapAccess};
 use failure::_core::fmt::{Formatter, Debug};
 use std::fmt;
+use hyper::Body;
+use failure::_core::convert::TryFrom;
 
 #[derive(Debug)]
 pub struct Update {
@@ -48,7 +50,15 @@ impl <'de>Deserialize<'de> for Update {
 
                             if let Some(text) = text {
                                 contents = match text.chars().next() {
-                                    Some('/') => Some(Contents::Command(Command(String::from(&text[1..])))),
+                                    Some('/') => {
+                                        let command = String::from(&text[1..]);
+                                        let chat_id = *&value["chat"]["id"].as_u64()
+                                            .ok_or_else(||de::Error::custom("Can not parse chat id"))?;
+                                        Some(Contents::Command(Command{
+                                            command,
+                                            chat_id
+                                        }))
+                                    },
                                     _ => Some(Contents::Message(Message::deserialize(value).map_err(de::Error::custom)?))
                                 }
                             }
@@ -71,11 +81,27 @@ impl <'de>Deserialize<'de> for Update {
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
+    pub message_id: u64,
     pub text: String,
+    pub from: User,
+    pub chat: Chat,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct User {
+    pub id: u64
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Chat {
+    pub id: u64
 }
 
 #[derive(Debug)]
-pub struct Command(String);
+pub struct Command {
+    command: String,
+    chat_id: u64,
+}
 
 #[derive(Debug)]
 pub enum Contents {
@@ -89,4 +115,20 @@ pub enum Contents {
 pub struct CallbackMessage;
 
 #[derive(Serialize)]
-pub struct ResponseMessage;
+#[serde(rename = "message")]
+pub struct ResponseMessage {
+    pub chat_id: u64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_mode: Option<String>,
+}
+
+
+impl TryFrom<ResponseMessage> for Body {
+    type Error = failure::Error;
+
+    fn try_from(value: ResponseMessage) -> Result<Self, Self::Error> {
+        let ser = serde_json::to_vec(&value)?;
+        Ok(Body::from(ser))
+    }
+}
