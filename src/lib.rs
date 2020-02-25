@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 
-use failure::Fallible;
+use failure::{Fallible, format_err};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode, Uri};
 use std::sync::Arc;
@@ -15,18 +15,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::pin::Pin;
 
 type CommandRef = AtomicUsize;
+type Fut = Pin<Box<dyn Future<Output=ResponseMessage> + Send + 'static>>;
+type CommandFn = Box<dyn Fn(Message) -> Fut + Send + Sync + 'static>;
 
-pub struct Bot<F> {
-    commands: Vec<Command<F>>,
+pub struct Bot {
+    commands: Vec<Command>,
     current_command: CommandRef,
     callbacks: Vec<Callback>,
     tg_api_uri: Uri,
     addr: SocketAddr,
 }
 
-impl <F, Fut> Bot<F>
-    where F: Fn(Message) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output=ResponseMessage> + Send + 'static
+impl Bot
 {
 
     pub fn new<A: Into<SocketAddr>>(addr: A, tg_api_uri: &'static str) -> Self {
@@ -39,11 +39,17 @@ impl <F, Fut> Bot<F>
         }
     }
 
-    pub fn add_command(&mut self, name: &'static  str, cb: F) {
+    pub fn add_command<F: Fn(Message) -> Fut + Send + Sync + 'static>(&mut self, name: &'static  str, cb: F){
+
+        if self.commands.iter()
+            .any(|command| command.name == name) {
+            panic!("Command with name: `{}` already exists", name);
+        }
+
         self.commands.push(Command {
             name,
             cb: Box::new(cb)
-        })
+        });
     }
 
     pub fn add_callback() {
@@ -67,18 +73,34 @@ impl <F, Fut> Bot<F>
         Ok(())
     }
 
-    async fn handle(self: Arc<Bot<F>>, request: Request<Body>) -> Fallible<Response<Body>> {
+    async fn handle(self: Arc<Bot>, request: Request<Body>) -> Fallible<Response<Body>> {
         match (request.method(), request.uri().path()) {
             (&Method::POST, "/bot") => { //FIXME test purpose
-                let command_idx = self.current_command.load(Ordering::Relaxed);
-                let command = self.commands.get(command_idx).unwrap();
+
                 let whole_body = hyper::body::aggregate(request).await?;
                 let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
 
+                let command_idx = self.current_command.load(Ordering::Relaxed);
+                let current_command: &Command = self.commands.get(command_idx).unwrap();
+
                 let body = match update.contents {
-                    Contents::Command(command) => Body::empty(),
+                    Contents::Command(command) => {
+
+                        let idx = self.commands.iter()
+                            .position(|existing|existing.name == command.command)
+                            .ok_or_else(||format_err!("Command with name: {} not found", command.command))?;
+                        self.current_command.store(idx, Ordering::Relaxed);
+
+                        let text = format!("Command set to {}", command.command);
+                        ResponseMessage {
+                            chat_id: command.chat_id,
+                            text,
+                            parse_mode: None
+                        }.try_into()?
+                    },
                     Contents::Message(message) => {
-                        let response =  (command.cb)(message).await;
+
+                        let response =  (current_command.cb)(message).await;
                         response.try_into()?
                     },
                     Contents::None => Body::empty()
@@ -103,9 +125,9 @@ impl <F, Fut> Bot<F>
     }
 }
 
-struct Command<F> {
+struct Command {
     name: &'static str,
-    cb: Box<F>
+    cb: CommandFn
 }
 
 struct Callback;

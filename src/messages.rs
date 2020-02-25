@@ -99,8 +99,8 @@ pub struct Chat {
 
 #[derive(Debug)]
 pub struct Command {
-    command: String,
-    chat_id: u64,
+    pub command: String,
+    pub chat_id: u64,
 }
 
 #[derive(Debug)]
