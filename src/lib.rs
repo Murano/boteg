@@ -6,6 +6,7 @@ use hyper::{Body, Method, Request, Response, Server, StatusCode, Uri};
 use std::sync::Arc;
 use std::future::Future;
 use bytes::buf::ext::BufExt;
+use futures_util::future::FutureExt;
 
 mod messages;
 pub use crate::messages::{Update, Contents, ResponseMessage, Message};
@@ -13,6 +14,9 @@ use std::net::SocketAddr;
 use std::convert::TryInto;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::pin::Pin;
+
+mod sender;
+use sender::Sender;
 
 type CommandRef = AtomicUsize;
 type Fut = Pin<Box<dyn Future<Output=ResponseMessage> + Send + 'static>>;
@@ -22,8 +26,8 @@ pub struct Bot {
     commands: Vec<Command>,
     current_command: CommandRef,
     callbacks: Vec<Callback>,
-    tg_api_uri: Uri,
     addr: SocketAddr,
+    sender: Sender,
 }
 
 impl Bot
@@ -34,8 +38,8 @@ impl Bot
             commands: vec![],
             current_command: AtomicUsize::new(0),
             callbacks: vec![],
-            tg_api_uri: Uri::from_static(tg_api_uri),
             addr: addr.into(),
+            sender: Sender::new(Uri::from_static(tg_api_uri))
         }
     }
 
@@ -56,7 +60,7 @@ impl Bot
 
     }
 
-    pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>{
+    pub async fn run(self) -> Fallible<()>{
         let addr = self.addr;
         let bot = Arc::new(self);
         let make_svc = make_service_fn(move|_conn| {
@@ -74,55 +78,64 @@ impl Bot
     }
 
     async fn handle(self: Arc<Bot>, request: Request<Body>) -> Fallible<Response<Body>> {
-        match (request.method(), request.uri().path()) {
-            (&Method::POST, "/bot") => { //FIXME test purpose
+        match request.method() {
+            &Method::POST => {
 
                 let whole_body = hyper::body::aggregate(request).await?;
                 let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
+                let chat_id = update.chat_id().expect("Expecting chat_id");
 
-                let command_idx = self.current_command.load(Ordering::Relaxed);
-                let current_command: &Command = self.commands.get(command_idx).unwrap();
-
-                let body = match update.contents {
-                    Contents::Command(command) => {
-
-                        let idx = self.commands.iter()
-                            .position(|existing|existing.name == command.command)
-                            .ok_or_else(||format_err!("Command with name: {} not found", command.command))?;
-                        self.current_command.store(idx, Ordering::Relaxed);
-
-                        let text = format!("Command set to {}", command.command);
+                let bot = Arc::clone(&self);
+                let body = match dispatch(bot, update).await {
+                    Ok(body) => body,
+                    Err(err) => {
+                        //TODO log
                         ResponseMessage {
-                            chat_id: command.chat_id,
-                            text,
+                            chat_id,
+                            text: "Got error".to_string(),
                             parse_mode: None
                         }.try_into()?
-                    },
-                    Contents::Message(message) => {
-
-                        let response =  (current_command.cb)(message).await;
-                        response.try_into()?
-                    },
-                    Contents::None => Body::empty()
+                    }
                 };
-
-
-
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(body)
-                    .unwrap()
-                )
+                self.sender.send_message(body).await?;
             },
-            _ => {
-                Ok(Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Body::empty())
-                    .unwrap()
-                )
-            }
-        }
+            _ => {}
+        };
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap())
     }
+}
+
+async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
+    let command_idx = bot.current_command.load(Ordering::Relaxed);
+    let current_command: &Command = bot.commands.get(command_idx).unwrap();
+
+    let body = match update.contents {
+        Contents::Command(command) => {
+
+            let idx = bot.commands.iter()
+                .position(|existing|existing.name == command.command)
+                .ok_or_else(||format_err!("Command with name: {} not found", command.command))?;
+            bot.current_command.store(idx, Ordering::Relaxed);
+
+            let text = format!("Command set to {}", command.command);
+            ResponseMessage {
+                chat_id: command.chat_id,
+                text,
+                parse_mode: None
+            }.try_into()?
+        },
+        Contents::Message(message) => {
+
+            let response = (current_command.cb)(message).await;
+            response.try_into()?
+        },
+        Contents::None => Body::empty()
+    };
+
+    Ok(body)
 }
 
 struct Command {

@@ -5,7 +5,7 @@ type Result<T> = std::result::Result<T, GenericError>;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut bot = boteg::Bot::new(([0, 0, 0, 0], 8088), "http://dfgdfgdfg.ru");
+    let mut bot = boteg::Bot::new(([0, 0, 0, 0], 8088), "https://api.telegram.org/**********/sendMessage");
 
     bot.add_command("test", |message : Message|{
         let text = format!("test -- {}", message.text);

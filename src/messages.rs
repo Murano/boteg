@@ -12,6 +12,16 @@ pub struct Update {
     pub contents: Contents,
 }
 
+impl Update {
+    pub fn chat_id(&self) -> Option<u64> {
+        match &self.contents {
+            Contents::Command(command) => Some(command.chat_id),
+            Contents::Message(message) => Some(message.chat.id),
+            Contents::None => None,
+        }
+    }
+}
+
 impl <'de>Deserialize<'de> for Update {
     fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error> where
         D: Deserializer<'de> {
