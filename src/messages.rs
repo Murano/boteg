@@ -1,7 +1,3 @@
-use failure::_core::{
-    convert::TryFrom,
-    fmt::{Debug, Formatter},
-};
 use hyper::Body;
 use serde::{
     de,
@@ -9,7 +5,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 use serde_json::Value;
-use std::fmt;
+use std::{convert::TryFrom, fmt};
 
 #[derive(Debug)]
 pub struct Update {
@@ -37,7 +33,7 @@ impl<'de> Deserialize<'de> for Update {
         impl<'de> Visitor<'de> for UpdateVisitor {
             type Value = Update;
 
-            fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("struct Update")
             }
 
