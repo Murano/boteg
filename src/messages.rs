@@ -1,10 +1,15 @@
-use serde::{de, Deserialize, Serialize, Deserializer};
-use serde_json::Value;
-use serde::de::{Visitor, MapAccess};
-use failure::_core::fmt::{Formatter, Debug};
-use std::fmt;
+use failure::_core::{
+    convert::TryFrom,
+    fmt::{Debug, Formatter},
+};
 use hyper::Body;
-use failure::_core::convert::TryFrom;
+use serde::{
+    de,
+    de::{MapAccess, Visitor},
+    Deserialize, Deserializer, Serialize,
+};
+use serde_json::Value;
+use std::fmt;
 
 #[derive(Debug)]
 pub struct Update {
@@ -22,23 +27,23 @@ impl Update {
     }
 }
 
-impl <'de>Deserialize<'de> for Update {
-    fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error> where
-        D: Deserializer<'de> {
-
+impl<'de> Deserialize<'de> for Update {
+    fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error>
+    where
+        D: Deserializer<'de>,
+    {
         struct UpdateVisitor;
 
-        impl <'de>Visitor<'de> for UpdateVisitor {
+        impl<'de> Visitor<'de> for UpdateVisitor {
             type Value = Update;
 
             fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
                 formatter.write_str("struct Update")
             }
 
-
             fn visit_map<V>(self, mut map: V) -> Result<Update, V::Error>
-                where
-                    V: MapAccess<'de>,
+            where
+                V: MapAccess<'de>,
             {
                 let mut update_id = None;
                 let mut contents = None;
@@ -56,35 +61,45 @@ impl <'de>Deserialize<'de> for Update {
                                 return Err(de::Error::duplicate_field("contents"));
                             }
 
-                            let text = value.get("text").and_then(|value|value.as_str());
+                            let text = value.get("text").and_then(|value| value.as_str());
 
                             if let Some(text) = text {
                                 contents = match text.chars().next() {
                                     Some('/') => {
                                         let command = String::from(&text[1..]);
-                                        let chat_id = *&value["chat"]["id"].as_u64()
-                                            .ok_or_else(||de::Error::custom("Can not parse chat id"))?;
-                                        Some(Contents::Command(Command{
+                                        let chat_id = value["chat"]["id"]
+                                            .as_u64()
+                                            .ok_or_else(|| {
+                                                de::Error::custom("Can not parse chat id")
+                                            })?;
+                                        Some(Contents::Command(Command {
                                             command,
-                                            chat_id
+                                            chat_id,
                                         }))
                                     },
-                                    _ => Some(Contents::Message(Message::deserialize(value).map_err(de::Error::custom)?))
+                                    _ => Some(Contents::Message(
+                                        Message::deserialize(value)
+                                            .map_err(de::Error::custom)?,
+                                    )),
                                 }
                             }
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     }
                 }
 
-                let update_id = update_id.ok_or_else(|| de::Error::missing_field("update_id"))?;
+                let update_id =
+                    update_id.ok_or_else(|| de::Error::missing_field("update_id"))?;
                 let contents = contents.unwrap_or(Contents::None);
 
-                Ok(Update{ update_id, contents })
+                Ok(Update {
+                    update_id,
+                    contents,
+                })
             }
         }
 
-        const FIELDS: &'static [&'static str] = &["update_id", "contents"];
+        const FIELDS: &[&str] = &["update_id", "contents"];
         deserializer.deserialize_struct("Update", FIELDS, UpdateVisitor)
     }
 }
@@ -99,12 +114,12 @@ pub struct Message {
 
 #[derive(Debug, Deserialize)]
 pub struct User {
-    pub id: u64
+    pub id: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Chat {
-    pub id: u64
+    pub id: u64,
 }
 
 #[derive(Debug)]
@@ -117,7 +132,7 @@ pub struct Command {
 pub enum Contents {
     Command(Command),
     Message(Message),
-    None
+    None,
 }
 
 
