@@ -21,7 +21,7 @@ mod sender;
 use sender::Sender;
 
 type CommandRef = AtomicUsize;
-type Fut = Pin<Box<dyn Future<Output = ResponseMessage> + Send + 'static>>;
+type Fut = Pin<Box<dyn Future<Output = Fallible<ResponseMessage>> + Send + 'static>>;
 type CommandFn = Box<dyn Fn(Message) -> Fut + Send + Sync + 'static>;
 
 pub struct Bot {
@@ -133,7 +133,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
             .try_into()?
         },
         Contents::Message(message) => {
-            let response = (current_command.cb)(message).await;
+            let response = (current_command.cb)(message).await?;
             response.try_into()?
         },
         Contents::None => Body::empty(),

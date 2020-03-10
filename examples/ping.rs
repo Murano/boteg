@@ -8,22 +8,22 @@ async fn main() -> Fallible<()> {
     bot.add_command("test", |message: Message| {
         let text = format!("test -- {}", message.text);
         Box::pin(async move {
-            ResponseMessage {
+            Ok(ResponseMessage {
                 chat_id: message.chat.id,
                 text,
                 parse_mode: None,
-            }
+            })
         })
     });
 
     bot.add_command("test2", |message: Message| {
         Box::pin(async move {
             let text = format!("test2 -- {}", message.text);
-            ResponseMessage {
+            Ok(ResponseMessage {
                 chat_id: message.chat.id,
                 text,
                 parse_mode: None,
-            }
+            })
         })
     });
 
