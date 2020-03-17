@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use bytes::buf::ext::BufExt;
-use failure::{format_err, Fallible};
+use failure::{err_msg, format_err, Fallible};
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode, Uri,
@@ -27,6 +27,7 @@ type CommandFn = Box<dyn Fn(Message) -> Fut + Send + Sync + 'static>;
 pub struct Bot {
     commands: Vec<Command>,
     current_command: CommandRef,
+    enabled_current_command: bool,
     #[allow(dead_code)]
     callbacks: Vec<Callback>,
     addr: SocketAddr,
@@ -38,6 +39,7 @@ impl Bot {
         Self {
             commands: vec![],
             current_command: AtomicUsize::new(0),
+            enabled_current_command: false,
             callbacks: vec![],
             addr: addr.into(),
             sender: Sender::new(Uri::from_static(tg_api_uri)),
@@ -57,6 +59,10 @@ impl Bot {
             name,
             cb: Box::new(cb),
         });
+    }
+
+    pub fn enable_current_command(&mut self) {
+        self.enabled_current_command = true;
     }
 
     pub fn add_callback() {}
@@ -114,6 +120,13 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
     let current_command: &Command = bot.commands.get(command_idx).unwrap();
 
     let body = match update.contents {
+        Contents::Current(chat_id) if bot.enabled_current_command => ResponseMessage {
+            chat_id,
+            text: current_command.name.to_owned(),
+            parse_mode: None,
+        }
+        .try_into()?,
+        Contents::Current(_) => return Err(err_msg("Command current is disabled")),
         Contents::Command(command) => {
             let idx = bot
                 .commands

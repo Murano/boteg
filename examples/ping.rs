@@ -3,7 +3,10 @@ use failure::Fallible;
 
 #[tokio::main]
 async fn main() -> Fallible<()> {
-    let mut bot = boteg::Bot::new(([0, 0, 0, 0], 8088), "https://api.telegram.org/888/sendMessage");
+    let mut bot = boteg::Bot::new(
+        ([0, 0, 0, 0], 8088),
+        "https://api.telegram.org/888/sendMessage",
+    );
 
     bot.add_command("test", |message: Message| {
         let text = format!("test -- {}", message.text);
@@ -26,6 +29,8 @@ async fn main() -> Fallible<()> {
             })
         })
     });
+
+    bot.enable_current_command();
 
     bot.run().await?;
 

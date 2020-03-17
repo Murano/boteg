@@ -18,6 +18,7 @@ impl Update {
         match &self.contents {
             Contents::Command(command) => Some(command.chat_id),
             Contents::Message(message) => Some(message.chat.id),
+            Contents::Current(chat_id) => Some(*chat_id),
             Contents::None => None,
         }
     }
@@ -68,10 +69,14 @@ impl<'de> Deserialize<'de> for Update {
                                             .ok_or_else(|| {
                                                 de::Error::custom("Can not parse chat id")
                                             })?;
-                                        Some(Contents::Command(Command {
-                                            command,
-                                            chat_id,
-                                        }))
+                                        if command == "current" {
+                                            Some(Contents::Current(chat_id))
+                                        } else {
+                                            Some(Contents::Command(Command {
+                                                command,
+                                                chat_id,
+                                            }))
+                                        }
                                     },
                                     _ => Some(Contents::Message(
                                         Message::deserialize(value)
@@ -128,6 +133,7 @@ pub struct Command {
 pub enum Contents {
     Command(Command),
     Message(Message),
+    Current(u64),
     None,
 }
 
