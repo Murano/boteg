@@ -9,7 +9,10 @@ use hyper::{
 use std::{future::Future, sync::Arc};
 
 mod messages;
-pub use crate::messages::{Contents, Message, ResponseMessage, Update};
+pub use crate::messages::{
+    Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
+    Update,
+};
 use std::{
     convert::TryInto,
     net::SocketAddr,
@@ -19,6 +22,7 @@ use std::{
 
 mod sender;
 use sender::Sender;
+use std::collections::HashMap;
 
 type CommandRef = AtomicUsize;
 type Fut = Pin<Box<dyn Future<Output = Fallible<ResponseMessage>> + Send + 'static>>;
@@ -28,8 +32,7 @@ pub struct Bot {
     commands: Vec<Command>,
     current_command: CommandRef,
     enabled_current_command: bool,
-    #[allow(dead_code)]
-    callbacks: Vec<Callback>,
+    callbacks: HashMap<&'static str, CommandFn>,
     addr: SocketAddr,
     sender: Sender,
 }
@@ -40,7 +43,7 @@ impl Bot {
             commands: vec![],
             current_command: AtomicUsize::new(0),
             enabled_current_command: false,
-            callbacks: vec![],
+            callbacks: HashMap::new(),
             addr: addr.into(),
             sender: Sender::new(Uri::from_static(tg_api_uri)),
         }
@@ -65,7 +68,13 @@ impl Bot {
         self.enabled_current_command = true;
     }
 
-    pub fn add_callback() {}
+    pub fn add_callback<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: &'static str,
+        cb: F,
+    ) {
+        self.callbacks.insert(name, Box::new(cb));
+    }
 
     pub async fn run(self) -> Fallible<()> {
         let addr = self.addr;
@@ -101,6 +110,7 @@ impl Bot {
                         chat_id,
                         text: "Got error".to_string(),
                         parse_mode: None,
+                        reply_markup: None,
                     }
                     .try_into()?
                 },
@@ -116,14 +126,31 @@ impl Bot {
 }
 
 async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
-    let command_idx = bot.current_command.load(Ordering::Relaxed);
+    let command_idx = bot.current_command.load(Ordering::Relaxed); //TODO не во всех коммандах используется, вынести
     let current_command: &Command = bot.commands.get(command_idx).unwrap();
+    let chat_id = update.chat_id();
 
     let body = match update.contents {
+        Contents::CallbackMessage(callback_message) => {
+            match bot.callbacks.get(callback_message.data.as_str()) {
+                Some(cb) => {
+                    let response = (cb)(callback_message.message).await?;
+                    response.try_into()?
+                },
+                None => ResponseMessage {
+                    chat_id: chat_id.unwrap(),
+                    text: callback_message.data.clone(),
+                    parse_mode: None,
+                    reply_markup: None,
+                }
+                .try_into()?,
+            }
+        },
         Contents::Current(chat_id) if bot.enabled_current_command => ResponseMessage {
             chat_id,
             text: current_command.name.to_owned(),
             parse_mode: None,
+            reply_markup: None,
         }
         .try_into()?,
         Contents::Current(_) => return Err(err_msg("Command current is disabled")),
@@ -142,6 +169,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
                 chat_id: command.chat_id,
                 text,
                 parse_mode: None,
+                reply_markup: None,
             }
             .try_into()?
         },
@@ -159,9 +187,6 @@ struct Command {
     name: &'static str,
     cb: CommandFn,
 }
-
-struct Callback;
-
 
 #[cfg(test)]
 mod tests {

@@ -18,6 +18,9 @@ impl Update {
         match &self.contents {
             Contents::Command(command) => Some(command.chat_id),
             Contents::Message(message) => Some(message.chat.id),
+            Contents::CallbackMessage(callback_message) => {
+                Some(callback_message.message.chat.id)
+            },
             Contents::Current(chat_id) => Some(*chat_id),
             Contents::None => None,
         }
@@ -52,6 +55,16 @@ impl<'de> Deserialize<'de> for Update {
                                 return Err(de::Error::duplicate_field("update_id"));
                             }
                             update_id = value.as_u64();
+                        },
+                        "callback_query" => {
+                            if contents.is_some() {
+                                return Err(de::Error::duplicate_field("contents"));
+                            }
+
+                            contents = Some(Contents::CallbackMessage(
+                                CallbackMessage::deserialize(value)
+                                    .map_err(de::Error::custom)?,
+                            ));
                         },
                         "message" => {
                             if contents.is_some() {
@@ -113,6 +126,14 @@ pub struct Message {
     pub chat: Chat,
 }
 
+#[derive(Deserialize, Debug)]
+pub struct CallbackMessage {
+    pub id: String,
+    pub from: User,
+    pub message: Message,
+    pub data: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct User {
     pub id: u64,
@@ -133,13 +154,11 @@ pub struct Command {
 pub enum Contents {
     Command(Command),
     Message(Message),
+    CallbackMessage(CallbackMessage),
     Current(u64),
     None,
 }
 
-
-#[derive(Deserialize)]
-pub struct CallbackMessage;
 
 #[derive(Serialize)]
 #[serde(rename = "message")]
@@ -148,6 +167,8 @@ pub struct ResponseMessage {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
 
@@ -158,4 +179,15 @@ impl TryFrom<ResponseMessage> for Body {
         let ser = serde_json::to_vec(&value)?;
         Ok(Body::from(ser))
     }
+}
+
+#[derive(Serialize)]
+pub struct InlineKeyboardMarkup {
+    pub inline_keyboard: [Vec<InlineKeyboardButton>; 1],
+}
+
+#[derive(Serialize)]
+pub struct InlineKeyboardButton {
+    pub text: String,
+    pub callback_data: String,
 }
