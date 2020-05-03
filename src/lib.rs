@@ -4,7 +4,7 @@ use bytes::buf::ext::BufExt;
 use failure::{err_msg, format_err, Fallible};
 use hyper::{
     service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode, Uri,
+    Body, Method, Request, Response, Server, StatusCode,
 };
 use std::{future::Future, sync::Arc};
 
@@ -39,15 +39,18 @@ pub struct Bot {
 }
 
 impl Bot {
-    pub fn new<A: Into<SocketAddr>>(addr: A, tg_api_uri: &'static str) -> Self {
-        Self {
+    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(
+        addr: A,
+        tg_api_uri: U,
+    ) -> Fallible<Self> {
+        Ok(Self {
             commands: vec![],
             current_command: AtomicUsize::new(0),
             enabled_current_command: false,
             callbacks: HashMap::new(),
             addr: addr.into(),
-            sender: Sender::new(Uri::from_static(tg_api_uri)),
-        }
+            sender: Sender::new(tg_api_uri.as_ref().parse()?),
+        })
     }
 
     pub fn add_command<F: Fn(Message) -> Fut + Send + Sync + 'static>(
