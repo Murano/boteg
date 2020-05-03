@@ -1,11 +1,13 @@
-use boteg::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage};
+use boteg::{
+    CallbackData, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
+};
 use failure::Fallible;
 
 #[tokio::main]
 async fn main() -> Fallible<()> {
     let mut bot = boteg::Bot::new(
         ([0, 0, 0, 0], 8088),
-        "https://api.telegram.org/888/sendMessage",
+        "https://api.telegram.org/bot684490980:AAFLmComOWytWMops7yw4G-MOaIHY0rzpc8/sendMessage",
     );
 
     bot.add_command("test", |message: Message| {
@@ -13,7 +15,10 @@ async fn main() -> Fallible<()> {
 
         let reply_markup = InlineKeyboardButton {
             text: "More examples".to_string(),
-            callback_data: "more".to_string(),
+            callback_data: CallbackData {
+                command: "more".to_string(),
+                message_id: Some(message.message_id),
+            },
         };
 
         let keyboard = InlineKeyboardMarkup {
@@ -30,17 +35,23 @@ async fn main() -> Fallible<()> {
         })
     });
 
-    bot.add_callback("more", |message: Message| {
-        let text = format!("more -- {}", message.text);
+    bot.add_callback("more", |message: Message, message_id: Option<u64>| {
+        let text = format!("more -- {} - {:?}", message.text, message_id);
 
         let reply_markup = InlineKeyboardButton {
             text: "More examples".to_string(),
-            callback_data: "more".to_string(),
+            callback_data: CallbackData {
+                command: "more".to_string(),
+                message_id,
+            },
         };
 
         let reply_markup2 = InlineKeyboardButton {
             text: "Other".to_string(),
-            callback_data: "other".to_string(),
+            callback_data: CallbackData {
+                command: "other".to_string(),
+                message_id: None,
+            },
         };
 
         let keyboard = InlineKeyboardMarkup {

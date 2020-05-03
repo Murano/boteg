@@ -10,8 +10,8 @@ use std::{future::Future, sync::Arc};
 
 mod messages;
 pub use crate::messages::{
-    Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
-    Update,
+    CallbackData, Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    ResponseMessage, Update,
 };
 use std::{
     convert::TryInto,
@@ -26,13 +26,14 @@ use std::collections::HashMap;
 
 type CommandRef = AtomicUsize;
 type Fut = Pin<Box<dyn Future<Output = Fallible<ResponseMessage>> + Send + 'static>>;
+type CallbackCommandFn = Box<dyn Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>;
 type CommandFn = Box<dyn Fn(Message) -> Fut + Send + Sync + 'static>;
 
 pub struct Bot {
     commands: Vec<Command>,
     current_command: CommandRef,
     enabled_current_command: bool,
-    callbacks: HashMap<&'static str, CommandFn>,
+    callbacks: HashMap<&'static str, CallbackCommandFn>,
     addr: SocketAddr,
     sender: Sender,
 }
@@ -68,7 +69,7 @@ impl Bot {
         self.enabled_current_command = true;
     }
 
-    pub fn add_callback<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+    pub fn add_callback<F: Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cb: F,
@@ -132,14 +133,16 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
 
     let body = match update.contents {
         Contents::CallbackMessage(callback_message) => {
-            match bot.callbacks.get(callback_message.data.as_str()) {
+            match bot.callbacks.get(callback_message.data.command.as_str()) {
                 Some(cb) => {
-                    let response = (cb)(callback_message.message).await?;
+                    let response =
+                        (cb)(callback_message.message, callback_message.data.message_id)
+                            .await?;
                     response.try_into()?
                 },
                 None => ResponseMessage {
                     chat_id: chat_id.unwrap(),
-                    text: callback_message.data.clone(),
+                    text: callback_message.data.command.clone(),
                     parse_mode: None,
                     reply_markup: None,
                 }

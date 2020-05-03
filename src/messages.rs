@@ -2,7 +2,7 @@ use hyper::Body;
 use serde::{
     de,
     de::{MapAccess, Visitor},
-    Deserialize, Deserializer, Serialize,
+    Deserialize, Deserializer, Serialize, Serializer,
 };
 use serde_json::Value;
 use std::{convert::TryFrom, fmt};
@@ -131,7 +131,66 @@ pub struct CallbackMessage {
     pub id: String,
     pub from: User,
     pub message: Message,
-    pub data: String,
+    pub data: CallbackData,
+}
+
+#[derive(Debug)]
+pub struct CallbackData {
+    pub command: String,
+    pub message_id: Option<u64>,
+}
+
+impl Serialize for CallbackData {
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> Result<<S as Serializer>::Ok, <S as Serializer>::Error>
+    where
+        S: Serializer,
+    {
+        if let Some(message_id) = self.message_id {
+            serializer.serialize_str(&format!("{}/{}", self.command, message_id))
+        } else {
+            serializer.serialize_str(&self.command)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CallbackData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, <D as Deserializer<'de>>::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct CallbackDataVisitor;
+
+        impl<'de> Visitor<'de> for CallbackDataVisitor {
+            type Value = CallbackData;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct CallbackData")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                let mut iter = value.split('/');
+                let command = iter
+                    .next()
+                    .ok_or_else(|| de::Error::custom("command not found"))?
+                    .to_owned();
+                let message_id = iter
+                    .next()
+                    .map(|message_id| message_id.parse())
+                    .transpose()
+                    .map_err(de::Error::custom)?;
+
+                Ok(CallbackData {
+                    command,
+                    message_id,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(CallbackDataVisitor)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,5 +248,5 @@ pub struct InlineKeyboardMarkup {
 #[derive(Serialize)]
 pub struct InlineKeyboardButton {
     pub text: String,
-    pub callback_data: String,
+    pub callback_data: CallbackData,
 }
