@@ -100,7 +100,8 @@ impl Bot {
     }
 
     async fn handle(self: Arc<Bot>, request: Request<Body>) -> Fallible<Response<Body>> {
-        if let Method::POST = *request.method() {
+        let method = request.method().clone();
+        if let Method::POST = method {
             let whole_body = hyper::body::aggregate(request).await?;
             let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
             let chat_id = update.chat_id().expect("Expecting chat_id");
@@ -120,6 +121,13 @@ impl Bot {
                 },
             };
             self.sender.send_message(body).await?;
+        }
+
+        if let Method::GET = method {
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::from("Hello world from boteg\n"))
+                .unwrap());
         }
 
         Ok(Response::builder()
@@ -190,7 +198,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
 }
 
 struct Command {
-    name: &'static str,
+    name: &'static str, //TODO дженерик тип реализующий трейт типа as_str что бы можно было юзать енамы вместо статической стринги
     cb: CommandFn,
 }
 
