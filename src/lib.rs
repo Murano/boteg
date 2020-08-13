@@ -7,6 +7,7 @@ use hyper::{
     Body, Method, Request, Response, Server, StatusCode,
 };
 use std::{future::Future, sync::Arc};
+use log::{debug, error, info};
 
 mod messages;
 pub use crate::messages::{
@@ -81,6 +82,7 @@ impl Bot {
     }
 
     pub async fn run(self) -> Fallible<()> {
+        info!("run: starting the bot");
         let addr = self.addr;
         let bot = Arc::new(self);
         let make_svc = make_service_fn(move |_conn| {
@@ -94,22 +96,23 @@ impl Bot {
         });
 
         let server = Server::bind(&addr).serve(make_svc);
+        info!("run: server listening on {}", addr);
         server.await?;
-
         Ok(())
     }
 
     async fn handle(self: Arc<Bot>, request: Request<Body>) -> Fallible<Response<Body>> {
+        debug!("handle: got request");
         if let Method::POST = *request.method() {
             let whole_body = hyper::body::aggregate(request).await?;
-            let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
+            let update: Update = serde_json::from_reader(whole_body.reader())?;
             let chat_id = update.chat_id().expect("Expecting chat_id");
 
             let bot = Arc::clone(&self);
             let body = match dispatch(bot, update).await {
                 Ok(body) => body,
-                Err(_err) => {
-                    //TODO log
+                Err(err) => {
+                    error!("dispatch error: {}", err);
                     ResponseMessage {
                         chat_id,
                         text: "Got error".to_string(),
@@ -131,7 +134,7 @@ impl Bot {
 
 async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
     let command_idx = bot.current_command.load(Ordering::Relaxed); //TODO не во всех коммандах используется, вынести
-    let current_command: &Command = bot.commands.get(command_idx).unwrap();
+    let current_command: &Command = bot.commands.get(command_idx).ok_or_else(||err_msg("Command not found"))?;
     let chat_id = update.chat_id();
 
     let body = match update.contents {

@@ -2,9 +2,17 @@ use boteg::{
     CallbackData, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
 };
 use failure::Fallible;
+use log::{info, LevelFilter};
+use simplelog::{WriteLogger, Config};
+use std::fs::File;
 
 #[tokio::main]
 async fn main() -> Fallible<()> {
+
+    WriteLogger::init(LevelFilter::Debug, Config::default(), File::create("log.txt")?)?;
+
+    info!("ololo");
+
     let mut bot = boteg::Bot::new(
         ([0, 0, 0, 0], 8088),
         "https://api.telegram.org/bot684490980:AAFLmComOWytWMops7yw4G-MOaIHY0rzpc8/sendMessage",
