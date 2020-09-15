@@ -3,13 +3,16 @@ use boteg::{
 };
 use failure::Fallible;
 use log::{info, LevelFilter};
-use simplelog::{WriteLogger, Config};
+use simplelog::{Config, WriteLogger};
 use std::fs::File;
 
 #[tokio::main]
 async fn main() -> Fallible<()> {
-
-    WriteLogger::init(LevelFilter::Debug, Config::default(), File::create("log.txt")?)?;
+    WriteLogger::init(
+        LevelFilter::Debug,
+        Config::default(),
+        File::create("log.txt")?,
+    )?;
 
     info!("ololo");
 

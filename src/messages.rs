@@ -66,7 +66,7 @@ impl<'de> Deserialize<'de> for Update {
                                     .map_err(de::Error::custom)?,
                             ));
                         },
-                        "message" => {
+                        "message" | "edited_message" => {
                             if contents.is_some() {
                                 return Err(de::Error::duplicate_field("contents"));
                             }
