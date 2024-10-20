@@ -1,4 +1,3 @@
-use hyper::Body;
 use serde::{
     de,
     de::{MapAccess, Visitor},
@@ -18,9 +17,7 @@ impl Update {
         match &self.contents {
             Contents::Command(command) => Some(command.chat_id),
             Contents::Message(message) => Some(message.chat.id),
-            Contents::CallbackMessage(callback_message) => {
-                Some(callback_message.message.chat.id)
-            },
+            Contents::CallbackMessage(callback_message) => Some(callback_message.message.chat.id),
             Contents::Current(chat_id) => Some(*chat_id),
             Contents::None => None,
         }
@@ -55,17 +52,16 @@ impl<'de> Deserialize<'de> for Update {
                                 return Err(de::Error::duplicate_field("update_id"));
                             }
                             update_id = value.as_u64();
-                        },
+                        }
                         "callback_query" => {
                             if contents.is_some() {
                                 return Err(de::Error::duplicate_field("contents"));
                             }
 
                             contents = Some(Contents::CallbackMessage(
-                                CallbackMessage::deserialize(value)
-                                    .map_err(de::Error::custom)?,
+                                CallbackMessage::deserialize(value).map_err(de::Error::custom)?,
                             ));
-                        },
+                        }
                         "message" => {
                             if contents.is_some() {
                                 return Err(de::Error::duplicate_field("contents"));
@@ -77,33 +73,27 @@ impl<'de> Deserialize<'de> for Update {
                                 contents = match text.chars().next() {
                                     Some('/') => {
                                         let command = String::from(&text[1..]);
-                                        let chat_id = value["chat"]["id"]
-                                            .as_u64()
-                                            .ok_or_else(|| {
+                                        let chat_id =
+                                            value["chat"]["id"].as_u64().ok_or_else(|| {
                                                 de::Error::custom("Can not parse chat id")
                                             })?;
                                         if command == "current" {
                                             Some(Contents::Current(chat_id))
                                         } else {
-                                            Some(Contents::Command(Command {
-                                                command,
-                                                chat_id,
-                                            }))
+                                            Some(Contents::Command(Command { command, chat_id }))
                                         }
-                                    },
+                                    }
                                     _ => Some(Contents::Message(
-                                        Message::deserialize(value)
-                                            .map_err(de::Error::custom)?,
+                                        Message::deserialize(value).map_err(de::Error::custom)?,
                                     )),
                                 }
                             }
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     }
                 }
 
-                let update_id =
-                    update_id.ok_or_else(|| de::Error::missing_field("update_id"))?;
+                let update_id = update_id.ok_or_else(|| de::Error::missing_field("update_id"))?;
                 let contents = contents.unwrap_or(Contents::None);
 
                 Ok(Update {
@@ -141,10 +131,7 @@ pub struct CallbackData {
 }
 
 impl Serialize for CallbackData {
-    fn serialize<S>(
-        &self,
-        serializer: S,
-    ) -> Result<<S as Serializer>::Ok, <S as Serializer>::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<<S as Serializer>::Ok, <S as Serializer>::Error>
     where
         S: Serializer,
     {
@@ -218,7 +205,6 @@ pub enum Contents {
     None,
 }
 
-
 #[derive(Serialize)]
 #[serde(rename = "message")]
 pub struct ResponseMessage {
@@ -228,16 +214,6 @@ pub struct ResponseMessage {
     pub parse_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_markup: Option<InlineKeyboardMarkup>,
-}
-
-
-impl TryFrom<ResponseMessage> for Body {
-    type Error = failure::Error;
-
-    fn try_from(value: ResponseMessage) -> Result<Self, Self::Error> {
-        let ser = serde_json::to_vec(&value)?;
-        Ok(Body::from(ser))
-    }
 }
 
 #[derive(Serialize)]

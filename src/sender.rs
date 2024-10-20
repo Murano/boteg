@@ -1,28 +1,26 @@
+use crate::ResponseMessage;
 use failure::Fallible;
-use hyper::{client::HttpConnector, Body, Client, Method, Request, Uri};
-use hyper_tls::HttpsConnector;
+use reqwest::{Client, Url};
 
 pub struct Sender {
-    uri: Uri,
-    client: Client<HttpsConnector<HttpConnector>>,
+    uri: Url,
+    client: Client,
 }
 
 impl Sender {
-    pub fn new(uri: Uri) -> Self {
-        let https = HttpsConnector::new();
+    pub fn new(uri: Url) -> Self {
         Self {
             uri,
-            client: Client::builder().build::<_, hyper::Body>(https),
+            client: Client::new(),
         }
     }
 
-    pub async fn send_message(&self, body: Body) -> Fallible<()> {
-        let req = Request::builder()
-            .method(Method::POST)
-            .uri(&self.uri)
-            .header("content-type", "application/json")
-            .body(body)?;
-        let _ = self.client.request(req).await?;
+    pub async fn send_message(&self, message: ResponseMessage) -> Fallible<()> {
+        self.client
+            .post(self.uri.clone())
+            .json(&message)
+            .send()
+            .await?;
         Ok(())
     }
 }
