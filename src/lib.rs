@@ -17,9 +17,11 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+#[cfg(feature = "tls")]
 use axum_server::tls_rustls::RustlsConfig;
 use sender::Sender;
 use std::collections::HashMap;
+#[cfg(feature = "tls")]
 use std::path::PathBuf;
 
 type CommandRef = AtomicUsize;
@@ -75,6 +77,7 @@ impl Bot {
         self.callbacks.insert(name, Box::new(cb));
     }
 
+    #[cfg(feature = "tls")]
     pub async fn run(self) -> Fallible<()> {
         let addr = self.addr;
         let bot = Arc::new(self);
@@ -94,6 +97,19 @@ impl Bot {
         axum_server::bind_rustls(addr, config)
             .serve(app.into_make_service())
             .await?;
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tls"))]
+    pub async fn run(self) -> Fallible<()> {
+        let addr = self.addr;
+        let bot = Arc::new(self);
+
+        let app = Router::new().route("/", post(handle)).with_state(bot);
+
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
 
         Ok(())
     }
