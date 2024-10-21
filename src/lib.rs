@@ -1,28 +1,28 @@
-use std::convert::Infallible;
-
-use bytes::buf::ext::BufExt;
-use failure::{err_msg, format_err, Fallible};
-use hyper::{
-    service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
-};
+use failure::{bail, err_msg, format_err, Fallible};
 use std::{future::Future, sync::Arc};
 
 mod messages;
 pub use crate::messages::{
-    CallbackData, Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message,
-    ResponseMessage, Update,
+    CallbackData, Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
+    Update,
 };
 use std::{
-    convert::TryInto,
     net::SocketAddr,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 mod sender;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::post;
+use axum::{Json, Router};
+#[cfg(feature = "tls")]
+use axum_server::tls_rustls::RustlsConfig;
 use sender::Sender;
 use std::collections::HashMap;
+#[cfg(feature = "tls")]
+use std::path::PathBuf;
 
 type CommandRef = AtomicUsize;
 type Fut = Pin<Box<dyn Future<Output = Fallible<ResponseMessage>> + Send + 'static>>;
@@ -39,10 +39,7 @@ pub struct Bot {
 }
 
 impl Bot {
-    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(
-        addr: A,
-        tg_api_uri: U,
-    ) -> Fallible<Self> {
+    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(addr: A, tg_api_uri: U) -> Fallible<Self> {
         Ok(Self {
             commands: vec![],
             current_command: AtomicUsize::new(0),
@@ -80,56 +77,66 @@ impl Bot {
         self.callbacks.insert(name, Box::new(cb));
     }
 
+    #[cfg(feature = "tls")]
     pub async fn run(self) -> Fallible<()> {
         let addr = self.addr;
         let bot = Arc::new(self);
-        let make_svc = make_service_fn(move |_conn| {
-            let bot = bot.clone();
-            async {
-                Ok::<_, Infallible>(service_fn(move |request| {
-                    let bot = bot.clone();
-                    bot.handle(request)
-                }))
-            }
-        });
 
-        let server = Server::bind(&addr).serve(make_svc);
-        server.await?;
+        // configure certificate and private key used by https
+        let config = RustlsConfig::from_pem_file(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("serts")
+                .join("cert.pem"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("serts")
+                .join("key.pem"),
+        )
+        .await?;
+
+        let app = Router::new().route("/", post(handle)).with_state(bot);
+        axum_server::bind_rustls(addr, config)
+            .serve(app.into_make_service())
+            .await?;
 
         Ok(())
     }
 
-    async fn handle(self: Arc<Bot>, request: Request<Body>) -> Fallible<Response<Body>> {
-        if let Method::POST = *request.method() {
-            let whole_body = hyper::body::aggregate(request).await?;
-            let update: Update = serde_json::from_reader(whole_body.reader()).unwrap();
-            let chat_id = update.chat_id().expect("Expecting chat_id");
+    #[cfg(not(feature = "tls"))]
+    pub async fn run(self) -> Fallible<()> {
+        let addr = self.addr;
+        let bot = Arc::new(self);
 
-            let bot = Arc::clone(&self);
-            let body = match dispatch(bot, update).await {
-                Ok(body) => body,
-                Err(_err) => {
-                    //TODO log
-                    ResponseMessage {
-                        chat_id,
-                        text: "Got error".to_string(),
-                        parse_mode: None,
-                        reply_markup: None,
-                    }
-                    .try_into()?
-                },
-            };
-            self.sender.send_message(body).await?;
-        }
+        let app = Router::new().route("/", post(handle)).with_state(bot);
 
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::empty())
-            .unwrap())
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await?;
+
+        Ok(())
     }
 }
 
-async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
+async fn handle(
+    State(bot): State<Arc<Bot>>,
+    Json(update): Json<Update>,
+) -> Result<Json<()>, StatusCode> {
+    let chat_id = update.chat_id().expect("Expecting chat_id");
+    let body = dispatch(bot.clone(), update).await.unwrap_or_else(|_err| {
+        //TODO log
+        ResponseMessage {
+            chat_id,
+            text: "Got error".to_string(),
+            parse_mode: None,
+            reply_markup: None,
+        }
+    });
+    if bot.sender.send_message(body).await.is_err() {
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    Ok(Json(()))
+}
+
+async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
     let command_idx = bot.current_command.load(Ordering::Relaxed); //TODO не во всех коммандах используется, вынести
     let current_command: &Command = bot.commands.get(command_idx).unwrap();
     let chat_id = update.chat_id();
@@ -138,36 +145,29 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
         Contents::CallbackMessage(callback_message) => {
             match bot.callbacks.get(callback_message.data.command.as_str()) {
                 Some(cb) => {
-                    let response =
-                        (cb)(callback_message.message, callback_message.data.message_id)
-                            .await?;
-                    response.try_into()?
-                },
+                    (cb)(callback_message.message, callback_message.data.message_id).await?
+                }
                 None => ResponseMessage {
                     chat_id: chat_id.unwrap(),
                     text: callback_message.data.command.clone(),
                     parse_mode: None,
                     reply_markup: None,
-                }
-                .try_into()?,
+                },
             }
-        },
+        }
         Contents::Current(chat_id) if bot.enabled_current_command => ResponseMessage {
             chat_id,
             text: current_command.name.to_owned(),
             parse_mode: None,
             reply_markup: None,
-        }
-        .try_into()?,
+        },
         Contents::Current(_) => return Err(err_msg("Command current is disabled")),
         Contents::Command(command) => {
             let idx = bot
                 .commands
                 .iter()
                 .position(|existing| existing.name == command.command)
-                .ok_or_else(|| {
-                    format_err!("Command with name: {} not found", command.command)
-                })?;
+                .ok_or_else(|| format_err!("Command with name: {} not found", command.command))?;
             bot.current_command.store(idx, Ordering::Relaxed);
 
             let text = format!("Command set to {}", command.command);
@@ -177,13 +177,9 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
                 parse_mode: None,
                 reply_markup: None,
             }
-            .try_into()?
-        },
-        Contents::Message(message) => {
-            let response = (current_command.cb)(message).await?;
-            response.try_into()?
-        },
-        Contents::None => Body::empty(),
+        }
+        Contents::Message(message) => (current_command.cb)(message).await?,
+        Contents::None => bail!("Contents::NONE"),
     };
 
     Ok(body)
@@ -192,25 +188,4 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<Body> {
 struct Command {
     name: &'static str,
     cb: CommandFn,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-
-    #[test]
-    fn add_command() {
-        let mut bot = Bot::new();
-
-        bot.add_command("test", |message| {
-            async {
-                println!("It works");
-                1
-            }
-        });
-    }
 }

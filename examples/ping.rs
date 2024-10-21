@@ -1,6 +1,4 @@
-use boteg::{
-    CallbackData, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
-};
+use boteg::{CallbackData, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage};
 use failure::Fallible;
 
 #[tokio::main]
