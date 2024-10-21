@@ -1,11 +1,4 @@
-use std::convert::Infallible;
-
-// use bytes::buf::ext::BufExt;
 use failure::{bail, err_msg, format_err, Fallible};
-// use hyper::{
-//     service::{make_service_fn, service_fn},
-//     Body, Method, Request, Response, Server, StatusCode,
-// };
 use std::{future::Future, sync::Arc};
 
 mod messages;
@@ -14,7 +7,6 @@ pub use crate::messages::{
     Update,
 };
 use std::{
-    convert::TryInto,
     net::SocketAddr,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering},
@@ -25,8 +17,10 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::{Json, Router};
+use axum_server::tls_rustls::RustlsConfig;
 use sender::Sender;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 type CommandRef = AtomicUsize;
 type Fut = Pin<Box<dyn Future<Output = Fallible<ResponseMessage>> + Send + 'static>>;
@@ -85,10 +79,21 @@ impl Bot {
         let addr = self.addr;
         let bot = Arc::new(self);
 
-        let app = Router::new().route("/", post(handle)).with_state(bot);
+        // configure certificate and private key used by https
+        let config = RustlsConfig::from_pem_file(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("serts")
+                .join("cert.pem"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("serts")
+                .join("key.pem"),
+        )
+        .await?;
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        let app = Router::new().route("/", post(handle)).with_state(bot);
+        axum_server::bind_rustls(addr, config)
+            .serve(app.into_make_service())
+            .await?;
 
         Ok(())
     }
@@ -108,15 +113,11 @@ async fn handle(
             reply_markup: None,
         }
     });
-    if let Err(_) = bot.sender.send_message(body).await {
+    if bot.sender.send_message(body).await.is_err() {
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     Ok(Json(()))
-}
-
-async fn handle2(State(bot): State<Arc<Bot>>, Json(update): Json<Update>) -> Json<()> {
-    Json(())
 }
 
 async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
@@ -128,9 +129,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
         Contents::CallbackMessage(callback_message) => {
             match bot.callbacks.get(callback_message.data.command.as_str()) {
                 Some(cb) => {
-                    let response =
-                        (cb)(callback_message.message, callback_message.data.message_id).await?;
-                    response
+                    (cb)(callback_message.message, callback_message.data.message_id).await?
                 }
                 None => ResponseMessage {
                     chat_id: chat_id.unwrap(),
@@ -163,10 +162,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
                 reply_markup: None,
             }
         }
-        Contents::Message(message) => {
-            let response = (current_command.cb)(message).await?;
-            response
-        }
+        Contents::Message(message) => (current_command.cb)(message).await?,
         Contents::None => bail!("Contents::NONE"),
     };
 
