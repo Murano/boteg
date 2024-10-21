@@ -1,5 +1,7 @@
-use failure::{bail, err_msg, format_err, Fallible};
+use anyhow::{bail, format_err};
 use std::{future::Future, sync::Arc};
+
+pub type Fallible<T> = anyhow::Result<T>;
 
 mod messages;
 pub use crate::messages::{
@@ -161,7 +163,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
             parse_mode: None,
             reply_markup: None,
         },
-        Contents::Current(_) => return Err(err_msg("Command current is disabled")),
+        Contents::Current(_) => bail!("Command current is disabled"),
         Contents::Command(command) => {
             let idx = bot
                 .commands

@@ -1,5 +1,4 @@
-use crate::ResponseMessage;
-use failure::Fallible;
+use crate::{Fallible, ResponseMessage};
 use reqwest::{Client, Url};
 
 pub struct Sender {

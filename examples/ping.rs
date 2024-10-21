@@ -1,5 +1,5 @@
+use boteg::Fallible;
 use boteg::{CallbackData, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage};
-use failure::Fallible;
 
 #[tokio::main]
 async fn main() -> Fallible<()> {
