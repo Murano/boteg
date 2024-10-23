@@ -38,9 +38,14 @@ pub struct Bot {
     callbacks: HashMap<&'static str, CallbackCommandFn>,
     addr: SocketAddr,
     sender: Sender,
+    #[cfg(feature = "tls")]
+    cert: Option<PathBuf>,
+    #[cfg(feature = "tls")]
+    key: Option<PathBuf>,
 }
 
 impl Bot {
+    #[cfg(not(feature = "tls"))]
     pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(addr: A, tg_api_uri: U) -> Fallible<Self> {
         Ok(Self {
             commands: vec![],
@@ -49,6 +54,25 @@ impl Bot {
             callbacks: HashMap::new(),
             addr: addr.into(),
             sender: Sender::new(tg_api_uri.as_ref().parse()?),
+        })
+    }
+
+    #[cfg(feature = "tls")]
+    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(
+        addr: A,
+        tg_api_uri: U,
+        cert: Option<PathBuf>,
+        key: Option<PathBuf>,
+    ) -> Fallible<Self> {
+        Ok(Self {
+            commands: vec![],
+            current_command: AtomicUsize::new(0),
+            enabled_current_command: false,
+            callbacks: HashMap::new(),
+            addr: addr.into(),
+            sender: Sender::new(tg_api_uri.as_ref().parse()?),
+            cert,
+            key,
         })
     }
 
@@ -82,18 +106,25 @@ impl Bot {
     #[cfg(feature = "tls")]
     pub async fn run(self) -> Fallible<()> {
         let addr = self.addr;
-        let bot = Arc::new(self);
 
-        // configure certificate and private key used by https
-        let config = RustlsConfig::from_pem_file(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("serts")
-                .join("cert.pem"),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("serts")
-                .join("key.pem"),
-        )
-        .await?;
+        let config = match (&self.cert, &self.key) {
+            (Some(cert), Some(key)) => {
+                RustlsConfig::from_pem_file(PathBuf::from(cert), PathBuf::from(key)).await?
+            }
+            (_, _) => {
+                RustlsConfig::from_pem_file(
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("serts")
+                        .join("cert.pem"),
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("serts")
+                        .join("key.pem"),
+                )
+                .await?
+            }
+        };
+
+        let bot = Arc::new(self);
 
         let app = Router::new().route("/", post(handle)).with_state(bot);
         axum_server::bind_rustls(addr, config)
