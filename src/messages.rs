@@ -89,6 +89,15 @@ impl<'de> Deserialize<'de> for Update {
                                 }
                             }
                         }
+                        "edited_message" => {
+                            if contents.is_some() {
+                                return Err(de::Error::duplicate_field("contents"));
+                            }
+
+                            contents = Some(Contents::Message(
+                                Message::deserialize(value).map_err(de::Error::custom)?,
+                            ));
+                        }
                         _ => {}
                     }
                 }
