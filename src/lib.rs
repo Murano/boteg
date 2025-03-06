@@ -152,6 +152,7 @@ async fn handle(
     State(bot): State<Arc<Bot>>,
     Json(update): Json<Update>,
 ) -> Result<Json<()>, StatusCode> {
+    dbg!(&update);
     let chat_id = update.chat_id().expect("Expecting chat_id");
     let body = dispatch(bot.clone(), update).await.unwrap_or_else(|_err| {
         //TODO log
