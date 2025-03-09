@@ -218,6 +218,7 @@ pub enum Contents {
 #[serde(rename = "message")]
 pub struct ResponseMessage {
     pub chat_id: u64,
+    pub message_id: Option<u64>,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_mode: Option<String>,

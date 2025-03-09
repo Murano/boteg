@@ -157,6 +157,7 @@ async fn handle(
         //TODO log
         ResponseMessage {
             chat_id,
+            message_id: None,
             text: "Got error".to_string(),
             parse_mode: None,
             reply_markup: None,
@@ -182,6 +183,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
                 }
                 None => ResponseMessage {
                     chat_id: chat_id.unwrap(),
+                    message_id: None,
                     text: callback_message.data.command.clone(),
                     parse_mode: None,
                     reply_markup: None,
@@ -190,6 +192,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
         }
         Contents::Current(chat_id) if bot.enabled_current_command => ResponseMessage {
             chat_id,
+            message_id: None,
             text: current_command.name.to_owned(),
             parse_mode: None,
             reply_markup: None,
@@ -206,6 +209,7 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
             let text = format!("Command set to {}", command.command);
             ResponseMessage {
                 chat_id: command.chat_id,
+                message_id: None,
                 text,
                 parse_mode: None,
                 reply_markup: None,
