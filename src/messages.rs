@@ -133,7 +133,7 @@ pub struct CallbackMessage {
     pub data: CallbackData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallbackData {
     pub command: String,
     pub message_id: Option<u64>,
@@ -159,7 +159,7 @@ impl<'de> Deserialize<'de> for CallbackData {
     {
         struct CallbackDataVisitor;
 
-        impl<'de> Visitor<'de> for CallbackDataVisitor {
+        impl Visitor<'_> for CallbackDataVisitor {
             type Value = CallbackData;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -214,11 +214,10 @@ pub enum Contents {
     None,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename = "message")]
 pub struct ResponseMessage {
     pub chat_id: u64,
-    pub message_id: Option<u64>,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parse_mode: Option<String>,
@@ -226,12 +225,12 @@ pub struct ResponseMessage {
     pub reply_markup: Option<InlineKeyboardMarkup>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct InlineKeyboardMarkup {
     pub inline_keyboard: [Vec<InlineKeyboardButton>; 1],
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct InlineKeyboardButton {
     pub text: String,
     pub callback_data: CallbackData,
