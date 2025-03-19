@@ -8,6 +8,7 @@ pub use crate::messages::{
     CallbackData, Contents, InlineKeyboardButton, InlineKeyboardMarkup, Message, ResponseMessage,
     Update,
 };
+use std::borrow::Cow;
 use std::{
     net::SocketAddr,
     pin::Pin,
@@ -33,9 +34,10 @@ type CommandFn = Box<dyn Fn(Message) -> Fut + Send + Sync + 'static>;
 
 pub struct Bot {
     commands: Vec<Command>,
+    inline_commands: HashMap<Cow<'static, str>, Command>,
     current_command: CommandRef,
     enabled_current_command: bool,
-    callbacks: HashMap<&'static str, CallbackCommandFn>,
+    callbacks: HashMap<Cow<'static, str>, CallbackCommandFn>,
     addr: SocketAddr,
     sender: Sender,
     #[cfg(feature = "tls")]
@@ -46,61 +48,142 @@ pub struct Bot {
 
 impl Bot {
     #[cfg(not(feature = "tls"))]
-    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(addr: A, tg_api_uri: U) -> Fallible<Self> {
+    pub fn new<A: Into<SocketAddr>>(addr: A, token: String) -> Fallible<Self> {
         Ok(Self {
             commands: vec![],
+            inline_commands: HashMap::default(),
             current_command: AtomicUsize::new(0),
             enabled_current_command: false,
             callbacks: HashMap::new(),
             addr: addr.into(),
-            sender: Sender::new(tg_api_uri.as_ref().parse()?),
+            sender: Sender::new(token),
         })
     }
 
     #[cfg(feature = "tls")]
-    pub fn new<A: Into<SocketAddr>, U: AsRef<str>>(
+    pub fn new<A: Into<SocketAddr>>(
         addr: A,
-        tg_api_uri: U,
+        token: String,
         cert: Option<PathBuf>,
         key: Option<PathBuf>,
     ) -> Fallible<Self> {
         Ok(Self {
             commands: vec![],
+            inline_commands: HashMap::default(),
             current_command: AtomicUsize::new(0),
             enabled_current_command: false,
             callbacks: HashMap::new(),
             addr: addr.into(),
-            sender: Sender::new(tg_api_uri.as_ref().parse()?),
+            sender: Sender::new(token),
             cert,
             key,
         })
     }
 
-    pub fn add_command<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+    pub fn add_command_static<F: Fn(Message) -> Fut + Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cb: F,
     ) {
+        if let Err(err) = self.add_command(Cow::Borrowed(name), cb) {
+            panic!("{:?}", err);
+        }
+    }
+
+    pub fn add_command_dynamic<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: String,
+        cb: F,
+    ) -> Fallible<()> {
+        self.add_command(Cow::Owned(name), cb)
+    }
+
+    fn add_command<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: Cow<'static, str>,
+        cb: F,
+    ) -> Fallible<()> {
         if self.commands.iter().any(|command| command.name == name) {
-            panic!("Command with name: `{}` already exists", name);
+            bail!("Command with name: `{}` already exists", name);
         }
 
         self.commands.push(Command {
             name,
             cb: Box::new(cb),
         });
+        Ok(())
+    }
+
+    pub fn add_command_inline_static<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: &'static str,
+        cb: F,
+    ) {
+        if let Err(err) = self.add_command_inline(Cow::Borrowed(name), cb) {
+            panic!("{:?}", err);
+        }
+    }
+
+    pub fn add_command_inline_dynamic<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: String,
+        cb: F,
+    ) -> Fallible<()> {
+        self.add_command_inline(Cow::Owned(name), cb)
+    }
+
+    fn add_command_inline<F: Fn(Message) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: Cow<'static, str>,
+        cb: F,
+    ) -> Fallible<()> {
+        if self.inline_commands.contains_key(&name) {
+            bail!("Inline command with name: `{}` already exists", &name);
+        }
+
+        self.inline_commands.insert(
+            name.clone(),
+            Command {
+                name,
+                cb: Box::new(cb),
+            },
+        );
+        Ok(())
     }
 
     pub fn enable_current_command(&mut self) {
         self.enabled_current_command = true;
     }
 
-    pub fn add_callback<F: Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>(
+    pub fn add_callback_static<F: Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cb: F,
     ) {
+        if let Err(err) = self.add_callback(Cow::Borrowed(name), cb) {
+            panic!("{:?}", err);
+        }
+    }
+
+    pub fn add_callback_dynamic<F: Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: String,
+        cb: F,
+    ) -> Fallible<()> {
+        self.add_callback(Cow::Owned(name), cb)
+    }
+
+    fn add_callback<F: Fn(Message, Option<u64>) -> Fut + Send + Sync + 'static>(
+        &mut self,
+        name: Cow<'static, str>,
+        cb: F,
+    ) -> Fallible<()> {
+        if self.inline_commands.contains_key(&name) {
+            bail!("Inline command with name: `{}` already exists", &name);
+        }
+
         self.callbacks.insert(name, Box::new(cb));
+        Ok(())
     }
 
     #[cfg(feature = "tls")]
@@ -157,21 +240,18 @@ async fn handle(
         //TODO log
         ResponseMessage {
             chat_id,
-            text: "Got error".to_string(),
+            text: "Got error".to_owned(),
             parse_mode: None,
             reply_markup: None,
         }
     });
-    if bot.sender.send_message(body).await.is_err() {
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    match bot.sender.send_message(body).await {
+        Ok(response) if response.ok => Ok(Json(())),
+        _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
-
-    Ok(Json(()))
 }
 
 async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
-    let command_idx = bot.current_command.load(Ordering::Relaxed); //TODO не во всех коммандах используется, вынести
-    let current_command: &Command = bot.commands.get(command_idx).unwrap();
     let chat_id = update.chat_id();
 
     let body = match update.contents {
@@ -182,18 +262,22 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
                 }
                 None => ResponseMessage {
                     chat_id: chat_id.unwrap(),
-                    text: callback_message.data.command.clone(),
+                    text: callback_message.data.command,
                     parse_mode: None,
                     reply_markup: None,
                 },
             }
         }
-        Contents::Current(chat_id) if bot.enabled_current_command => ResponseMessage {
-            chat_id,
-            text: current_command.name.to_owned(),
-            parse_mode: None,
-            reply_markup: None,
-        },
+        Contents::Current(chat_id) if bot.enabled_current_command => {
+            let command_idx = bot.current_command.load(Ordering::Relaxed);
+            let current_command: &Command = bot.commands.get(command_idx).unwrap();
+            ResponseMessage {
+                chat_id,
+                text: current_command.name.clone().into_owned(),
+                parse_mode: None,
+                reply_markup: None,
+            }
+        }
         Contents::Current(_) => bail!("Command current is disabled"),
         Contents::Command(command) => {
             let idx = bot
@@ -211,7 +295,15 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
                 reply_markup: None,
             }
         }
-        Contents::Message(message) => (current_command.cb)(message).await?,
+        Contents::Message(message) => {
+            if let Some(inline_command) = bot.inline_commands.get(message.text.as_str()) {
+                (inline_command.cb)(message).await?
+            } else {
+                let command_idx = bot.current_command.load(Ordering::Relaxed);
+                let current_command: &Command = bot.commands.get(command_idx).unwrap();
+                (current_command.cb)(message).await?
+            }
+        }
         Contents::None => bail!("Contents::NONE"),
     };
 
@@ -219,6 +311,6 @@ async fn dispatch(bot: Arc<Bot>, update: Update) -> Fallible<ResponseMessage> {
 }
 
 struct Command {
-    name: &'static str,
+    name: Cow<'static, str>,
     cb: CommandFn,
 }
